@@ -65,9 +65,9 @@ def process_market_data(stock_cap, market_name):
 
             merged_df = pd.merge(price_df, df[['외국인합계', 'is_high', '시가총액']], left_index=True, right_index=True,
                                  how='left')
-            merged_df['return_5'] = merged_df['종가'].shift(-5) / merged_df['종가'] - 1
-            merged_df['return_20'] = merged_df['종가'].shift(-20) / merged_df['종가'] - 1
-            merged_df['return_60'] = merged_df['종가'].shift(-60) / merged_df['종가'] - 1
+            merged_df['return_5'] = merged_df['종가'].shift(-5).rolling(window=5).mean() / merged_df['종가'] - 1
+            merged_df['return_20'] = merged_df['종가'].shift(-20).rolling(window=20).mean() / merged_df['종가'] - 1
+            merged_df['return_60'] = merged_df['종가'].shift(-60).rolling(window=60).mean() / merged_df['종가'] - 1
             merged_df['종목명'] = stock_cap[stock_cap['Code'] == stock_code]['Name'].values[0]
             merged_df['Market'] = stock_cap[stock_cap['Code'] == stock_code]['Market'].values[0]
 
