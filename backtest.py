@@ -2,11 +2,11 @@ import pandas as pd
 import numpy as np
 from pykrx import stock
 import FinanceDataReader as fdr
+import datetime
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
-
 
 pd.set_option('display.max_colwidth', None)
 
@@ -117,8 +117,9 @@ if kosdaq_results:
     kosdaq_final_df = pd.concat(kosdaq_results)
 
 # 결과 출력 및 저장
+today = datetime.today().strftime('%Y%m%d')
 print("결과를 엑셀 파일로 저장하는 중...")
-with pd.ExcelWriter('stosckfore1.xlsx') as writer:
+with pd.ExcelWriter(f'stockfore{today}.xlsx') as writer:
     if kospi_results:
         kospi_final_df.to_excel(writer, sheet_name='KOSPI', index=True)
     if kosdaq_results:
