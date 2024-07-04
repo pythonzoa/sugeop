@@ -1,74 +1,137 @@
 import pandas as pd
 import numpy as np
 from pykrx import stock
-import matplotlib.pyplot as plt
 import FinanceDataReader as fdr
-import random
+from datetime import datetime
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
+
 pd.set_option('display.max_colwidth', None)
 
 # 데이터 불러오기
-start_date = '20190901'
-end_date = '20240427'
+start_date = '20220901'
+end_date = '20241231'
 
-# 랜덤으로 30개 종목 선택
+print("데이터 불러오는 중...")
+# KRX 리스트 가져오기
 krx_list = fdr.StockListing('KRX')
-stock_cap = krx_list[krx_list['Marcap'] >= 1e12][['Code', 'Name']]
-random_stock_codes = random.sample(stock_cap['Code'].tolist(), 30)
+kospi_list = fdr.StockListing('KOSPI')[['Code', 'Name']]
+kosdaq_list = fdr.StockListing('KOSDAQ')[['Code', 'Name']]
+print("데이터 불러오기 완료.")
+
+# 코스피, 코스닥 구분
+print("코스피와 코스닥 구분 중...")
+krx_list['Market'] = np.where(krx_list['Code'].isin(kospi_list['Code']), 'KOSPI',
+                              np.where(krx_list['Code'].isin(kosdaq_list['Code']), 'KOSDAQ', 'Unknown'))
+print("코스피와 코스닥 구분 완료.")
 
 # 데이터프레임 초기화
-merged_all_df = pd.DataFrame()
-
-for stock_code in random_stock_codes:
-    # KRX 데이터를 통해 외국인 순매수량 가져오기
-    df = stock.get_market_trading_value_by_date(start_date, end_date, stock_code)
-    df = df.drop(columns=["기타법인", "전체", "개인"])
-
-    # 빈 값을 0으로 대체
-    df.replace('', 0, inplace=True)
-
-    # 순매수 여부 계산 (양수면 1, 아니면 0)
-    df['positive_buy'] = (df['외국인합계'] > 0).astype(int)
-
-    # 연속 순매수 일수 계산
-    df['continuous_buy_days'] = df['positive_buy'] * (df['positive_buy'].groupby((df['positive_buy'] != df['positive_buy'].shift()).cumsum()).cumcount() + 1)
-
-    # 5일 이상 순매수 후 끊기는 날 찾기
-    df['break_days'] = (df['continuous_buy_days'] >= 5) & (df['positive_buy'].shift(-1) == 0)
-
-    # 기준일 설정 및 연속 순매수 일수 표기
-    df['buy_days_until_break'] = df['continuous_buy_days'].shift(1).where(df['break_days'])
-
-    # 주식 가격 데이터 가져오기
-    price_df = stock.get_market_ohlcv_by_date(start_date, end_date, stock_code)
-    price_df = price_df.drop(columns=['시가', '고가', '저가', '거래량'])
-
-    # 데이터 병합
-    merged_df = pd.merge(price_df, df[['외국인합계', 'continuous_buy_days','buy_days_until_break']], left_index=True, right_index=True, how='left')
-
-    # 투자 전략 시뮬레이션: 매수 후 20일, 60일 후 수익률 계산
-    merged_df['return_5'] = merged_df['종가'].shift(-5) / merged_df['종가'] - 1
-    merged_df['return_20'] = merged_df['종가'].shift(-20) / merged_df['종가'] - 1
-    merged_df['return_60'] = merged_df['종가'].shift(-60) / merged_df['종가'] - 1
-
-    # 종목명 추가
-    merged_df['종목명'] = stock_cap[stock_cap['Code'] == stock_code]['Name'].values[0]
-
-    # 데이터프레임 추가
-    merged_all_df = pd.concat([merged_all_df, merged_df])
-
-    # is_continuous_buy가 1인 경우 필터링하여 데이터프레임 생성
-    continuous_buy_df = merged_all_df[(merged_all_df['continuous_buy_days'] >= 5) & merged_all_df['buy_days_until_break'] > 0]
+kospi_results = []
+kosdaq_results = []
 
 
-# 결과 출력 또는 파일 저장
-output_df = continuous_buy_df[['종목명', 'continuous_buy_days', 'return_5', 'return_20', 'return_60']]
-output_df.to_excel('continuous_buy_analysis.xlsx', index=True)
+# 함수 정의
+def process_market_data(stock_cap, market_name):
+    results = []
+    random_stock_codes = stock_cap['Code'].tolist()
+
+    print(f"{market_name} 데이터 처리 시작. 종목 수: {len(random_stock_codes)}")
+    merged_all_df = pd.DataFrame()
+
+    for stock_code in random_stock_codes:
+        try:
+            print(f"{stock_code} 데이터 처리 중...")
+            df = stock.get_market_trading_value_by_date(start_date, end_date, stock_code)
+            df['시가총액'] = stock.get_market_cap_by_date(start_date, end_date, stock_code)['시가총액']
+            columns_to_drop = ["기타법인", "전체", "개인"]
+            df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+            df.replace('', 0, inplace=True)
+
+            if '외국인합계' in df.columns:
+                # 순매수 여부 계산 (양수면 1, 아니면 0)
+                df['positive_buy'] = (df['외국인합계'] > 0).astype(int)
+
+                # 연속 순매수 일수 계산
+                df['continuous_buy_days'] = df['positive_buy'] * (df['positive_buy'].groupby(
+                    (df['positive_buy'] != df['positive_buy'].shift()).cumsum()).cumcount() + 1)
+
+                # 5일 이상 순매수 후 끊기는 날 찾기
+                df['break_days'] = (df['continuous_buy_days'].shift(1) >= 5) & (df['positive_buy'] == 0)
+
+                # 기준일 설정 및 연속 순매수 일수 표기
+                df['buy_days_until_break'] = df['continuous_buy_days'].shift(1).where(df['break_days'])
+
+                df['is_high'] = df['buy_days_until_break'].apply(lambda x: 1 if not pd.isna(x) else 0)
+                # print(df)
+            else:
+                print(f"'외국인합계' 열이 {stock_code} 데이터프레임에 존재하지 않습니다.")
+                df['is_high'] = 0
+                df['외국인합계'] = 0
+
+            price_df = stock.get_market_ohlcv_by_date(start_date, end_date, stock_code)
+            price_df = price_df.drop(columns=['시가', '고가', '저가', '거래량'])
+
+            merged_df = pd.merge(price_df, df[['외국인합계', 'is_high', '시가총액', 'buy_days_until_break']], left_index=True,
+                                 right_index=True, how='left')
+            merged_df['return_5'] = merged_df['종가'].shift(-5).rolling(window=5).mean() / merged_df['종가'] - 1
+            merged_df['return_20'] = merged_df['종가'].shift(-20).rolling(window=20).mean() / merged_df['종가'] - 1
+            merged_df['return_60'] = merged_df['종가'].shift(-60).rolling(window=60).mean() / merged_df['종가'] - 1
+            merged_df['종목명'] = stock_cap[stock_cap['Code'] == stock_code]['Name'].values[0]
+            merged_df['Market'] = stock_cap[stock_cap['Code'] == stock_code]['Market'].values[0]
+
+            merged_all_df = pd.concat([merged_all_df, merged_df])
+        except Exception as e:
+            print(f"Error processing {stock_code}: {e}")
+
+    if 'is_high' in merged_all_df.columns:
+        high_df = merged_all_df[merged_all_df['is_high'] == 1]
+        if market_name == '코스피':
+            high_df = high_df[high_df['시가총액'] >= 2e12]
+            high_df['시가총액_구간'] = pd.qcut(high_df['시가총액'], 10, labels=[f'{i + 1}구간' for i in range(10)])
+        elif market_name == '코스닥':
+            high_df = high_df[high_df['시가총액'] >= 5e11]
+            high_df['시가총액_구간'] = pd.qcut(high_df['시가총액'], 10, labels=[f'{i + 1}구간' for i in range(10)])
+
+        output_df = high_df[
+            ['종목명', 'Market', 'return_5', 'return_20', 'return_60', '시가총액', '시가총액_구간', 'buy_days_until_break']]
+        results.append(output_df)
+        print(f"{market_name} 데이터 처리 완료.")
+    else:
+        print(f"'is_high' 컬럼이 존재하지 않습니다.")
+
+    return results
 
 
+# 코스피와 코스닥 데이터 처리
+def get_market_data(market, threshold):
+    market_cap = krx_list[(krx_list['Market'] == market) & (krx_list['Marcap'] >= threshold)]
+    return market_cap
 
 
+print("코스피 데이터 가져오는 중...")
+kospi_stock_cap = get_market_data('KOSPI', 90e11)
+print("코스닥 데이터 가져오는 중...")
+kosdaq_stock_cap = get_market_data('KOSDAQ', 40e11)
 
+# 데이터 처리
+kospi_results = process_market_data(kospi_stock_cap, "코스피")
+kosdaq_results = process_market_data(kosdaq_stock_cap, "코스닥")
+
+# 결과 합치기
+if kospi_results:
+    kospi_final_df = pd.concat(kospi_results)
+
+if kosdaq_results:
+    kosdaq_final_df = pd.concat(kosdaq_results)
+
+# 결과 출력 및 저장
+today = datetime.today().strftime('%Y%m%d%M')
+print("결과를 엑셀 파일로 저장하는 중...")
+with pd.ExcelWriter(f'stockfore{today}.xlsx') as writer:
+    if kospi_results:
+        kospi_final_df.to_excel(writer, sheet_name='KOSPI', index=True)
+    if kosdaq_results:
+        kosdaq_final_df.to_excel(writer, sheet_name='KOSDAQ', index=True)
+print("엑셀 파일 저장 완료.")
